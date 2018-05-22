@@ -1,3 +1,3 @@
 
-## Lembrete
-Incluir link (rpubs) aqui e também atualizar o diretório reports!
+#### Relatório - Lab3 - Checkpoint 1
+Disponível em http://rpubs.com/flaviacoelho/390159
