@@ -1,0 +1,530 @@
+---
+title: "Fundamentos de Pesquisa em Ciência da Computação 2"
+subtitle: "Lab 3 - Checkpoint 1"
+date: "16 de maio de 2018"
+output:
+  html_document:
+    df_print: paged
+---
+
+## **Inferência Estatística aplicada às Sessões, Buscas e Navegação na Wikimedia**
+
+Neste relatório, apresentam-se conclusões baseadas em inferência estatística sobre o *dataset* search_data.scv (extraído de https://meta.wikimedia.org/wiki/Schema:TestSearchSatisfaction2). 
+
+O relatório está organizado de acordo com as seguintes seções: As 2 seções iniciais descrevem as bibliotecas utilizadas e os procedimentos para a importação do dataset. Na seção 3, exibem-se as respostas, baseadas em inferência estatística, para os 3 questionamentos, a seguir:
+
+* 1. Qual é taxa diária de cliques? Como isso varia entre os grupos (A e B)?
+     Nesta subseção, consideram-se 2 análises: (i) teste A/B, no qual se investa a variação entre os grupos A e B e (ii) teste A/A que compara a metade das sessões de busca do grupo A com a outra metade das sessões do mesmo grupo.
+* 2. Quais resultados de busca, as pessoas tendem a tentar primeiro? Como isso muda ao longo do dia-a-dia?
+* 3. Qual é taxa diária de zero resultados? Como isso varia entre os grupos (A e B)?
+
+A seção 4 apresenta a conclusão geral sobre a população, concebida a partir de inferência estatística.
+
+Ressalta-se que a inferência estatística é baseada no nível de confiança de 95% e *bootstrap* (2000 repetições para amostras de tamanho 40).
+
+### **1. Bibliotecas Utilizadas**
+```{r message = FALSE, warning = FALSE}
+
+library(tidyverse)
+library(here)
+library(lubridate)
+library(summarytools)
+library(boot)  ##para bootstrap
+theme_set(theme_bw())
+
+```
+
+
+### **2. Importação dos Dados**
+
+```{r message = FALSE, warning = FALSE}
+
+buscas_original = read_csv(here::here("data/search_data.csv"))
+glimpse(buscas_original) ##visualizando as observações pré-filtragens
+
+```
+A partir da tabela, nota-se que há 136.234 observações.
+
+
+### **3. Respostas aos Questionamentos**
+
+#### **3.1 Qual é taxa diária de *clickthrough*? Como isso varia entre os grupos?**
+
+##### **Qual é taxa diária de *clickthrough*? **
+De acordo com a definição (disponível em https://github.com/wikimedia-research/Discovery-Hiring-Analyst-2016), considera-se a taxa de *clickthrough* como a proporção de sessões nas quais o usuário clicou em um dos resultados obtidos. Sendo assim, para o contexto da primeira parte da pergunta, consideram-se apenas os valores diferentes de *0* para as variáveis **num_clicks** e **results**, pois estas enfatizam que a busca gerou resultados e que o usuário clicou em algum link. 
+
+```{r message = FALSE, warning = FALSE}
+
+buscas = buscas_original %>% 
+  filter(results > 0)
+glimpse(buscas) ##visualizando as observações pós-filtragem
+
+```
+
+O *dataframe* sessions_by_date armazena as taxas diárias de *clickthough*.
+
+```{r message = FALSE, warning = FALSE}
+
+sessions_by_date = buscas %>%
+  group_by(date(session_start_date)) %>%       ##agrupando por data da ocorrência da sessão
+  summarize(total_sessions_by_date = n(),       
+            total_sessions_with_clicks_by_date = sum(num_clicks > 0), 
+            rate = (total_sessions_with_clicks_by_date/total_sessions_by_date) * 100)   
+
+glimpse(sessions_by_date) 
+
+```
+
+A figura 1 exibe a distribuição de taxas de *clickthrough* por data de ocorrência.
+
+```{r message = FALSE, warning = FALSE}
+
+sessions_by_date %>% 
+    ggplot(aes(y = rate, x = `date(session_start_date)`)) +
+    ggtitle("Figura 1 - Taxa de clickthroug x Data de ocorrência") +
+    geom_bar(stat = "identity", fill = "white", color = "red") + 
+    ylab("Taxa de clickthrough") + 
+    xlab("Data de ocorrência") +
+    theme(text = element_text(family = "Arial", size = 10), plot.title = element_text(size = 10), axis.title.x = element_text(size = 10), axis.title.y = element_text(size = 10))
+    
+```
+
+Calcula-se a média das taxas diárias de *clickthrough*.
+
+```{r message = FALSE, warning = FALSE}
+
+print(mean(sessions_by_date$rate))
+
+```
+
+Portanto, aproximadamente, em 29,9% das sessões diárias, os usuários clicam em algum resultado de busca. Nesse contexto, a média das taxas diárias de *clickthrough* será considerada para fins de inferência estatística.
+
+A partir do *dataframe* buscas, é extraída uma amostra e o processo de *bootstraping* é iniciado. A figura 2 exibe a distribuição amostral das médias de taxas diárias de *clickthrough* calculadas. Em seguida, calcula-se o intervalo de confiança.
+
+```{r message = FALSE, warning = FALSE}
+
+set.seed(123)    ## semente 'aleatória' para a aleatoriedade de amostras
+
+experimento = sample_n(buscas, 40)   ## obtém amostra de tamanho 40
+glimpse(experimento)               
+
+bootstrap_function <- function(data, index){   ## computa a estatística de interesse e é um parâmetro para boot
+    mean_rate_of_sessions_with_clicks_by_date = data %>%
+      slice(index) %>%       ##reamostragem
+      group_by(date(session_start_date)) %>%       ##agrupando por data da ocorrência da sessão
+      summarize(total_sessions_by_date = n(),   
+            total_sessions_with_clicks_by_date = sum(num_clicks > 0), 
+            rate = (total_sessions_with_clicks_by_date/total_sessions_by_date) * 100) %>%
+      pull(rate) %>%  ##variável de interesse
+      mean()        ## média das taxas diárias de clickthrough
+    
+    return(mean_rate_of_sessions_with_clicks_by_date)
+}
+
+bootstraps <- boot(experimento, bootstrap_function, R = 2000)  ## número de repetições é 2000
+
+glimpse(bootstraps$t)
+
+tibble(estatistica = as.double(bootstraps$t)) %>% 
+  ggplot(aes(x = estatistica)) + 
+  geom_histogram(fill = "white", color = "red") +
+  ggtitle("Figura 2 - Distribuição amostral da média das taxas diárias de clickthrough") +
+  ylab(" ") +
+  xlab("Média das taxas diárias de clickthrough") +
+  theme(text = element_text(family = "Arial", size = 10), plot.title = element_text(size = 10), axis.title.x = element_text(size = 10), axis.title.y = element_text(size = 10))
+    
+boot.ci(bootstraps, conf = 0.95, type = "perc")   ## calculando o intervalo de confiança 
+
+```
+
+Portanto, para a amostra, pode-se afirmar com 95% de confiança que a média de taxas diárias de *clickthrough* geral está entre 13,06% e 40,62%.
+
+
+##### **Como isso varia entre os grupos?**
+
+##### *Teste A/B*
+Nesta parte, considera-se a variação da taxa diária de *clickthrough* em termos da comparação entre os usuários do grupo A e B. Para fins de inferência estatística, utiliza-se a **média das taxas diárias de *clickthrough* **.
+
+O processo de *bootstraping* é realizado a partir da amostra (armazenada em *experimento*). A figura 3 mostra a distribuição da diferença entre as médias das taxas diárias de clickthrough para os grupos A e B. Em seguida, o intervalo de confiança para a diferença é calculado.
+
+
+```{r message = FALSE,warning = FALSE}
+
+bootstrap_group_function <- function(data, index){   
+  
+  mean_rate_of_sessions_with_clicks_by_group = data %>%
+      slice(index) %>%
+      group_by(group, date(session_start_date)) %>%
+      summarize(total_sessions_by_date = n(), 
+            total_sessions_with_clicks_by_date = sum(num_clicks > 0), 
+            rate = (total_sessions_with_clicks_by_date/total_sessions_by_date) * 100) %>%
+      summarize(mean_rate = mean(rate)) %>% 
+      pull(mean_rate)  
+      
+    return(mean_rate_of_sessions_with_clicks_by_group[1] - mean_rate_of_sessions_with_clicks_by_group[2])
+  
+}
+
+bootstraps <- boot(experimento, bootstrap_group_function, R = 2000)
+glimpse(bootstraps$t)
+
+tibble(estatistica = as.double(bootstraps$t)) %>% 
+  ggplot(aes(x = estatistica)) + 
+  geom_histogram(fill = "white", color = "red") +
+  ggtitle("Figura 3 - Distribuição amostral da diferença entre as médias das taxas\ndiárias de clickthrough para os grupos A e B") +
+  ylab(" ") +
+  xlab("Média das taxas diárias de clickthrough") +
+  theme(text = element_text(family = "Arial", size = 10), plot.title = element_text(size = 10), axis.title.x = element_text(size = 10), axis.title.y = element_text(size = 10))
+
+boot.ci(bootstraps, conf = 0.95, type = "perc")   
+
+```
+
+Com 95% de confiança, afirma-se que o intervalo de confiança (-31,903 a 22,851) contêm as verdadeiras diferenças entre os grupos. E, uma vez que este intervalo inclui o valor zero, as diferenças não são estatisticamente significativas quanto às médias das taxas diárias de *clickthrough* entre os grupos A e B, isto é, não há evidências de diferenças entre os grupos.
+
+
+##### *Teste A/A*
+Nesta parte, considera-se a variação da taxa diária de *clickthrough* em termos da comparação entre a metade de observações do grupo A com a outra metade do mesmo grupo. Para fins de inferência estatística, permanece a **média das taxas diárias de *clickthrough* **.
+
+Novamente, é considerada a amostra de tamanho 40 (armazenada em *experimento*). Após o *bootstraping*, é exibida a distribuição amostral da diferença entre as médias das taxas diárias de clickthrough para as metades do grupo A (figura 4) e o intervalo de confiança para a diferença é calculado.
+
+```{r message = FALSE,warning = FALSE}
+
+bootstrap_groupA_function <- function(data, index){   ## computa a estatística de interesse e é um parâmetro para boot
+    data <- data %>% 
+      slice(index)
+    
+    half <- data %>%
+      head(nrow(data)/2) %>%
+      mutate(group_half = "Primeira metade")
+    
+    other_half <- data %>%
+      tail(nrow(data)/2) %>%
+      mutate(group_half = "Segunda metade")
+    
+    sample_group_a = bind_rows(half, other_half)
+    
+    mean_rate_of_sessions_with_clicks_group_a = sample_group_a %>%
+      group_by(group_half, date(session_start_date)) %>%
+      summarize(total_sessions_by_date = n(),       
+            total_sessions_with_clicks_by_date = sum(num_clicks > 0), 
+            rate = (total_sessions_with_clicks_by_date/total_sessions_by_date) * 100) %>%
+      summarize(mean_rate = mean(rate)) %>% ## média das taxas diárias de clickthrough
+      pull(mean_rate)  ##variável de interesse
+      
+    return(mean_rate_of_sessions_with_clicks_group_a[1] - mean_rate_of_sessions_with_clicks_group_a[2])
+}
+
+bootstraps <- boot(experimento, bootstrap_groupA_function, R = 2000)
+glimpse(bootstraps$t)
+
+tibble(estatistica = as.double(bootstraps$t)) %>% 
+  ggplot(aes(x = estatistica)) + 
+  geom_histogram(fill = "white", color = "red") +
+  ggtitle("Figura 4 - Distribuição amostral da diferença entre as médias das taxas\ndiárias de clickthrough para as metades de A") +
+  ylab(" ") +
+  xlab("Média das taxas diárias de clickthrough") +
+  theme(text = element_text(family = "Arial", size = 10), plot.title = element_text(size = 10), axis.title.x = element_text(size = 10), axis.title.y = element_text(size = 10))
+
+boot.ci(bootstraps, conf = 0.95, type = "perc")   
+
+```
+
+O intervalo de confiança (-27,377 a 27,967) contêm as verdadeiras diferenças entre os subgrupos de A, com 95% de confiança. Dado que o intervalo de confiança inclui o valor zero, não há evidências de diferença estatisticamente significativa entre os subgrupos.
+
+
+
+#### **3.2 Quais resultados de busca, as pessoas tendem a tentar primeiro? Como isso muda no dia-a-dia?**
+
+##### **Quais resultados de busca, as pessoas tendem a tentar primeiro? **
+
+A variável *first_click* armazena a posição do primeiro resultado de busca clicado, por sessão. Sendo assim, são utilizados apenas os valores diferentes de *NA* para essa variável e valores maiores que 0 para a variável *results*, pois estas enfatizam que a busca gerou resultados e que o usuário clicou em algum link. Uma vez que o *dataframe* buscas já fitrou *resultados* menores ou iguais a zero, será efetuada a filtragem de buscas com relação à variável *first_click*, a seguir. 
+
+```{r message = FALSE, warning = FALSE}
+
+buscas = buscas %>% ## excluindo possíveis valores inesperados para a variável
+  filter(!is.na(first_click)) %>% 
+  filter(first_click != 0)
+glimpse(buscas) ##visualizando as observações pós-filtragem
+ 
+```
+
+Pós-filtragem, há 33.187 observações disponíveis. A figura 5 exibe a distribuição da posição do primeiro clique efetuado pelo usuário, por sessão de busca. 
+
+```{r message = FALSE, warning = FALSE}
+
+buscas %>% 
+    ggplot(aes(x = first_click)) +
+    ggtitle("Figura 5 - Posição do primeiro clique por sessão") +
+    geom_bar(bins = 10, fill = "white", color = "red") + 
+    scale_x_log10() +  
+    ylab(" ") + 
+    xlab("Posição do primeiro clique") +
+    theme(text = element_text(family = "Arial", size = 10), plot.title = element_text(size = 10), axis.title.x = element_text(size = 10), axis.title.y = element_text(size = 10))
+
+```
+
+É possível perceber, que a maioria dos usuários tendem a clicar nos resultados de busca que estão nas posições de 1 a 10, embora sejam percebidos *outliers*. Na presença desses valores extremos, é relevante observar a média e mediana das posições.
+
+```{r message = FALSE, warning = FALSE}
+
+print(mean(buscas$first_click))
+print(median(buscas$first_click))
+
+```
+
+Nota-se que o valor mediano é 1, o que indica que, em metade das sessões, o resultado da busca que está na posição 1 foi clicado primeiro; e, na outra metade, o primeiro clique foi efetuado em posições maiores que 1. Sendo assim, a mediana é a estatística de medida central mais adequada para o contexto e será o foco da inferência estatística, pois não é influenciada por valores extremos (*outliers*). 
+
+Assim, o processo de *bootstraping* é iniciado, considerando uma amostra extraída do *dataframe* buscas. A figura 6 exibe a distribuição amostral das medianas da posição do primeiro clique, geradas. Em sequência, o intervalo de confiança é calculado.
+
+```{r message = FALSE, warning = FALSE}
+
+experimento = sample_n(buscas, 40)     ## coleta-se nova amostra para responder a pergunta 3.2, pois o dataframe sofreu filtragem
+glimpse(experimento)                    ## exibe a amostra extraída do dataframe
+
+bootstrap_median_function <- function(data, index){   ## computa a estatística de interesse e é um parâmetro para boot
+    median_first_click = data %>%
+      slice(index) %>%       ##reamostragem
+      pull(first_click) %>%  ##variável de interesse
+      median()               ## mediana das posição do primeiro clique para a esta reamostragem
+    
+    return(median_first_click)
+}
+
+bootstraps <- boot(experimento, bootstrap_median_function, R = 2000)  ## número de repetições é 2000
+
+glimpse(bootstraps$t)
+
+tibble(estatistica = as.double(bootstraps$t)) %>% 
+  ggplot(aes(x = estatistica)) + 
+  geom_histogram(fill = "white", color = "red") +
+  ggtitle("Figura 6 - Distribuição amostral da mediana da posição do primeiro clique por sessão") +
+  ylab(" ") +
+  xlab("Posição do primeiro clique") +
+  scale_y_log10() +  
+  theme(text = element_text(family = "Arial", size = 10), plot.title = element_text(size = 10), axis.title.x = element_text(size = 10), axis.title.y = element_text(size = 10))
+    
+boot.ci(bootstraps, conf = 0.95, type = "basic")   ## calculando o intervalo de confiança 
+
+```
+
+Pode-se afirmar com 95% de confiança que o valor mediano é 1, ou seja, em 50% das sessões o resultado na posição 1 é clicado primeiro e, na outra metade, o primeiro clique foi efetuado em posições maiores que 1. 
+
+
+##### **Como isso muda no dia-a-dia?**
+Nesta análise, considera-se a data de realização de uma sessão (*session_start_date*). A figura 7 exibe a distribuição da posição do primeiro clique por data de ocorrência da busca.
+
+
+```{r message = FALSE, warning = FALSE}
+
+first_click_in_sessions_by_date = buscas %>%
+    group_by(date(session_start_date)) %>%
+    summarize(mediana = median(first_click))
+
+glimpse(first_click_in_sessions_by_date)
+
+first_click_in_sessions_by_date %>% 
+    ggplot(aes(y = mediana, x = `date(session_start_date)`)) +
+    ggtitle("Figura 7 - Mediana da posição do primeiro clique por data de ocorrência da busca") +
+    geom_bar(stat = "identity", fill = "white", color = "red") + 
+    ylab("Mediana na posição do primeiro clique") + 
+    xlab("Data de ocorrência") +
+    theme(text = element_text(family = "Arial", size = 10), plot.title = element_text(size = 10), axis.title.x = element_text(size = 10), axis.title.y = element_text(size = 10)) 
+
+```
+
+Portanto, nota-se que ao longo dos dias observados, confirma-se que o valor mediano da posição do primeiro clique é igual a 1.
+
+Para o processo de *bootstraping*, considera-se a mesma amostra (armazenada em *experimento*). A seguir são exibidos os gráficos, por dia de observação, da distribuição das medianas da posição do primeiro clique, geradas a partir do processo de *bootstraping*, considerando a mesma amostra de tamanho 100 (armazenada em *experimento*), utilizada para responder a primeira parte do questionamento. Em seguida, o intervalo de confiança é calculado.
+
+```{r message = FALSE, warning = FALSE, out.width = "40%"}
+
+first_click_in_sessions_by_date_function <- function(data, date){
+  first_click_day = data %>%
+      group_by(date(session_start_date) == date) %>%
+      summarize(median_first_click = median(first_click))
+  return(first_click_day)
+}
+
+bootstrap_median_date_function <- function(data, index){   ## computa a estatística de interesse e é um parâmetro para boot
+  median_first_click_by_date = data %>%
+      slice(index) %>%       ##reamostragem
+      pull(median_first_click) %>%  ##variável de interesse
+      median()               ## mediana das posição do primeiro clique para a esta reamostragem
+    
+    return(median_first_click_by_date)
+}
+
+show_bootstrap_function <- function(data){
+      print(tibble(estatistica = as.double(data$t)) %>% 
+      ggplot(aes(x = estatistica)) + 
+      geom_histogram(fill = "white", color = "red") +
+      ggtitle("Distribuição amostral da mediana da posição do primeiro clique por sessão") +
+      ylab(" ") +
+      xlab("Posição do primeiro clique") +
+      theme(text = element_text(family = "Arial", size = 10), plot.title = element_text(size = 10), axis.title.x = element_text(size = 10), axis.title.y = element_text(size = 10)))
+  }
+
+bootstrap_total_function <- function(data){
+  dates <- seq(as.Date("2016-03-01"), by = 1, len = 8) ##ver depois como deixar automático
+
+  for(d in 1:length(dates)){
+      bootstraps <- boot(first_click_in_sessions_by_date_function(experimento, as.Date(dates[d])), bootstrap_median_date_function, R = 2000)
+      print(paste('Data: ', as.Date(dates[d])))
+      show_bootstrap_function(bootstraps)
+      print(paste("Calculando o intervalo de confiança para :", as.Date(dates[d])))
+      print(boot.ci(bootstraps, conf = 0.95, type = "basic"))
+  }
+}
+
+bootstrap_total_function(experimento)
+
+```
+
+As figuras exibidas ressaltam a distribuição amostral da mediana para o período de 01 a 08/03/2016. Nos dias 01, 02, 03, 06 e 08, não foi necessário calcular o intervalo de confiança, confirmando a mediana igual a 1. Com 95% de confiança, pode-se afirmar que no dia 04, confirma-sea posição 1 como primeira a ser clicada; no dia 05, pode-se afirmar que o valor mediano está entre 1 e 3; e no dia 07, entre 1 e 2. 
+
+
+#### **3.3 Qual é taxa diária de zero resultados? Como isso varia entre os grupos?**
+
+##### **Qual é taxa diária de zero resultados?**
+
+Para esta pergunta, consideram-se apenas os valores iguais a *0* para a variável **results** e o *dataset* original.
+
+```{r message = FALSE, warning = FALSE}
+
+buscas_original <- buscas_original %>%
+  filter(!is.na(results))
+
+glimpse(buscas_original) ##visualizando as observações pós-filtragem
+
+```
+
+A partir da tabela, nota-se que há 136.234 observações a considerar. As taxas diárias de zero resultados são armazenadas no *dataframe* sessions_by_date.
+
+```{r message = FALSE, warning = FALSE}
+
+sessions_by_date = buscas_original %>%
+  group_by(date(session_start_date)) %>%       ##agrupando por data da ocorrência da sessão
+  summarize(total_sessions_by_date = n(),       
+            total_sessions_with_zero_results_by_date = sum(results == 0), 
+            rate = (total_sessions_with_zero_results_by_date/total_sessions_by_date) * 100)   
+
+glimpse(sessions_by_date) 
+
+```
+
+A figura 8 exibe a distribuição de taxas de zero resultados por data de ocorrência.
+
+```{r message = FALSE, warning = FALSE}
+
+sessions_by_date %>% 
+    ggplot(aes(y = rate, x = `date(session_start_date)`)) +
+    ggtitle("Figura 8 - Taxa de zeros resultados por data de ocorrência") +
+    geom_bar(stat = "identity", fill = "white", color = "red") + 
+    ylab("Taxa de zero resultados") + 
+    xlab("Data de ocorrência") +
+    theme(text = element_text(family = "Arial", size = 10), plot.title = element_text(size = 10), axis.title.x = element_text(size = 10), axis.title.y = element_text(size = 10))
+    
+```
+
+Calcula-se a média das taxas diárias de zero resultados.
+
+```{r message = FALSE, warning = FALSE}
+
+print(mean(sessions_by_date$rate))
+
+```
+
+Portanto, em 18,43% das sessões diárias, os usuários obtém zero resultados, em média. Nesse contexto, a média das taxas diárias de zero resultados será considerada para fins de inferência estatística.
+
+A partir do *dataframe* **buscas_original**, é extraída uma amostra de tamanho 40 e o processo de *bootstraping* é iniciado. A figura 9 exibe a distribuição amostral das médias de taxas diárias de zero resultados, geradas via *bootstrap*. Em seguida, o intervalo de confiança é calculado.
+
+```{r message = FALSE, warning = FALSE}
+
+experimento = sample_n(buscas_original, 40)   ## obtém amostra de tamanho 40
+glimpse(experimento)                    ## exibe a amostra extraída do dataframe
+
+bootstrap_function <- function(data, index){   ## computa a estatística de interesse e é um parâmetro para boot
+    mean_rate_of_sessions_with_zero_results_by_date = data %>%
+      slice(index) %>%       ##reamostragem
+      group_by(date(session_start_date)) %>%       ##agrupando por data da ocorrência da sessão
+      summarize(total_sessions_by_date = n(),     
+            total_sessions_with_zero_results_by_date = sum(results == 0), 
+            rate = (total_sessions_with_zero_results_by_date/total_sessions_by_date) * 100) %>%
+      pull(rate) %>%  ##variável de interesse
+      mean()        ## média das taxas diárias de zero resultados
+    
+    return(mean_rate_of_sessions_with_zero_results_by_date)
+}
+
+bootstraps <- boot(experimento, bootstrap_function, R = 2000)  ## número de repetições é 2000
+
+glimpse(bootstraps$t)
+
+tibble(estatistica = as.double(bootstraps$t)) %>% 
+  ggplot(aes(x = estatistica)) + 
+  geom_histogram(fill = "white", color = "red") +
+  ggtitle("Figura 9 - Distribuição amostral da média das taxas diárias de zero resultados") +
+  ylab(" ") +
+  xlab("Média das taxas diárias de resultados") +
+  theme(text = element_text(family = "Arial", size = 10), plot.title = element_text(size = 10), axis.title.x = element_text(size = 10), axis.title.y = element_text(size = 10))
+    
+boot.ci(bootstraps, conf = 0.95, type = "perc")   ## calculando o intervalo de confiança 
+
+```
+
+Portanto, pode-se afirmar com 95% de confiança que a média de taxas diárias de zero resultados está entre 2,38% e 23,06%.
+
+
+##### **Como isso varia entre os grupos?**
+Para esta pergunta, considera-se a variação da taxa diária de zero resultados dos grupos A e B, ou seja, um teste A/B. Para fins de inferência estatística, utiliza-se a **média das taxas diárias de zero resultados**.
+
+O processo de *bootstraping* é realizado a partir da amostra (armazenada em *experimento*). A figura 10 mostra a distribuição da diferença entre as médias das taxas diárias de zero resultados para os grupos A e B. Em seguida, o intervalo de confiança para a diferença é calculado.
+
+
+```{r message = FALSE,warning = FALSE}
+
+bootstrap_group_function <- function(data, index){   ## computa a estatística de interesse e é um parâmetro para boot
+  
+  mean_rate_of_sessions_with_zero_results_by_group = data %>%
+      slice(index) %>%
+      group_by(group, date(session_start_date)) %>%
+      summarize(total_sessions_by_date = n(), 
+            total_sessions_with_zero_results_by_date = sum(results == 0), 
+            rate = (total_sessions_with_zero_results_by_date/total_sessions_by_date) * 100) %>%
+      summarize(mean_rate = mean(rate)) %>% ## média das taxas diárias de zero resultados
+      pull(mean_rate)  ##variável de interesse
+      
+    return(mean_rate_of_sessions_with_zero_results_by_group[1] - mean_rate_of_sessions_with_zero_results_by_group[2])
+  
+}
+
+bootstraps <- boot(experimento, bootstrap_group_function, R = 2000)
+glimpse(bootstraps$t)
+
+tibble(estatistica = as.double(bootstraps$t)) %>% 
+  ggplot(aes(x = estatistica)) + 
+  geom_histogram(fill = "white", color = "red") +
+  ggtitle("Figura 10 - Distribuição amostral da diferença entre as médias das taxas\ndiárias de zeros resultados para os grupos A e B") +
+  ylab(" ") +
+  xlab("Média das taxas diárias de zero resultados") +
+  theme(text = element_text(family = "Arial", size = 10), plot.title = element_text(size = 10), axis.title.x = element_text(size = 10), axis.title.y = element_text(size = 10))
+
+boot.ci(bootstraps, conf = 0.95, type = "perc")   
+
+```
+
+O intervalo de confiança inclui zero, constatando que as diferenças entre os grupos A e B não são estatisticamente significativas. Com 95% de confiança, afirma-se que o intervalo (-37,64 a 12,85) contêm as verdadeiras diferenças entre os grupos.
+
+### **4. Conclusões**
+Sabe-se que o intervalo de confiança representa a amplitude de valores que têm probabilidade (definida de acordo com o nível de confiança) de conter o verdadeiro valor da população. Sendo assim, com **95% de confiança**, as seguintes conclusões a respeito da população, podem ser inferidas:
+
+* A taxa diária de *clickthrough* é um dos valores no intervalo (13,06% a 40,62%). No teste A/B, obteve-se um intervalo de confiança (-31,903 a 22,851) que inclui o valor zero e, portanto, conclui-se que não há diferenças significativas entre a taxa diária de *clickthrough* para os grupos A e B. No teste A/A, o intervalo de confiança (-27,377 a 27,967) inclui zero, assim, também não há evidências de diferenças estatisticamente significativas para a taxa, entre os subgrupos de A;
+
+* No geral, em 50% das sessões, os resultados na posição 1 são clicados primeiro pelos usuários. Infere-se que, ao longo dos dias, em 50% das sessões, os resultados nas posições de 1 a 3 são clicados primeiro;
+
+* A taxa diária de zero resultados está no intervalo de 2,38% a 23,06%. No teste A/B, confirma-se a partir do intervalo de confiança (-37,64% a 12,85%) que não há diferenças estatisticamente significativas entre os grupos A e B em termos dessa taxa, pois o intervalo inclui o valor zero.
+
+Por fim, destaca-se que nos testes realizados (A/B e A/A), mesmo considerando taxas e variáveis distintas, não há diferenças estatísticas significativas, o que sugere um "comportamento padrão" dos usuários em termos da realização de buscas, independente do grupo ao qual pertence.
+
+
