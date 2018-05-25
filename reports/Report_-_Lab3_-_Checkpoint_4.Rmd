@@ -1,0 +1,320 @@
+---
+title: "Fundamentos de Pesquisa em Ciência da Computação 2"
+subtitle: "Lab 3 - Checkpoint 4"
+date: "23 de maio de 2018"
+output:
+  html_document:
+    df_print: paged
+---
+
+## **Inferência Estatística baseada em Teste de Hipóteses aplicada às Sessões, Buscas e Navegação na Wikimedia**
+
+Neste relatório, apresentam-se conclusões baseadas em inferência estatística sobre o *dataset* search_data.scv (extraído de https://meta.wikimedia.org/wiki/Schema:TestSearchSatisfaction2). 
+
+As seções iniciais deste relatório descrevem as bibliotecas utilizadas e os procedimentos para a importação do *dataset*. Na seção 3, explana-se o processo de teste de hipóteses com permutação, para as questões seguintes:
+
+* A taxa diária de *clickthrough* varia entre os grupos A e B?
+  <br>Pergunta relacionada ao questionamento "Qual é taxa diária de *clickthrough*? Como isso varia entre os grupos A e B?"
+  
+* A taxa diária de zero resultados varia entre os grupos A e B? 
+  <br>Pergunta relacionada ao questionamento "Qual é taxa diária de zero resultados? Como isso varia entre os grupos A e B?"
+
+A seção 4 apresenta uma conclusão geral enfatizando as vantagens/desvantagens, em termos dos resultados obtidos, da utilização de teste de hipóteses e intervalos de confiança (Lab3 - *Checkpoint* 1).
+
+
+### **1. Bibliotecas Utilizadas**
+```{r message = FALSE, warning = FALSE}
+library(tidyverse)
+library(here)
+library(lubridate)
+library(summarytools)
+library(boot)
+library(resample) ##para permutação e cálculo do p-valor
+library(GGally) ##extends 'ggplot2' by adding several functions to reduce the complexity of combining geometric objects with transformed data
+theme_set(theme_bw())
+```
+
+
+### **2. Importação dos Dados**
+```{r message = FALSE, warning = FALSE}
+buscas_original = read_csv(here::here("data/search_data.csv"))
+glimpse(buscas_original) ##visualizando as observações pré-filtragens
+```
+
+A partir da tabela, nota-se que há 136.234 observações.
+
+
+### **3. Processo de Teste de Hipóteses**
+
+Os seguintes passos são propostos para a realização dos testes de hipóteses para as questões 3.1 e 3.2:
+
+* Estabelecimento das hipóteses nula (H<sub>0</sub>) e alternativa (H<sub>1</sub>);
+* Determinação do nível de significância do teste (&alpha;);
+* Cálculo da estatística de teste a partir das observações; 
+* Cálculo do p-valor;
+* Interpretação dos resultados obtidos.
+
+
+#### **3.1 A taxa diária de *clickthrough* varia entre os grupos A e B?**
+
+
+##### **Estabelencendo as hipóteses nula e alternativa **
+
+* H<sub>0</sub>: A categoria do grupo (A ou B) não influencia a taxa diária de *clickthrough*
+* H<sub>1</sub>: A categoria do grupo influencia a taxa diária de *clickthrough*
+
+
+##### **Determinando o nível de significância do teste**
+
+Neste relatório, considera-se um nível de confiança (&gamma;) de 0,95, isto é, 95% de probabilidade de não rejeitar a hipótese nula, quando ela é verdadeira. Sendo assim, o nível de significância é 0,05 (&gamma; = 1 - &alpha;), o que representa a probabilidade de 5% de rejeitar a hipótese nula quando esta for verdadeira.
+
+
+##### **Calculando a estatística de teste**
+
+A **média** das taxas diárias de *clickthrough* é a estatística considerada para fins de inferência estatística. A figura 1 exibe a distribuição de taxas de *clickthrough* por data de ocorrência e grupo. Em seguida, a média de taxas de clickthrough diária por grupo é calculada.
+
+```{r message = FALSE, warning = FALSE}
+buscas1 = buscas_original %>% 
+  filter(results > 0) ##porque devem ser consideradas apenas buscas que geraram resultados para fins de análise
+glimpse(buscas1) ##visualizando as observações pós-filtragem
+
+sessions_by_date_and_group = buscas1 %>%
+  group_by(date = date(session_start_date), group) %>%       ##agrupando por data da ocorrência da sessão e por grupo
+  summarize(total_sessions_by_date = n(),       
+            total_sessions_with_clicks_by_date = sum(num_clicks > 0), 
+            rate = (total_sessions_with_clicks_by_date/total_sessions_by_date) * 100)   
+
+names(sessions_by_date_and_group)[1]<-"date" ##renomeando a primeira coluna
+
+glimpse(sessions_by_date_and_group) 
+
+group_names <- c('a' = "Grupo A", 'b' = "Grupo B")
+sessions_by_date_and_group %>% 
+    ggplot(aes(y = rate, x = date)) +
+    ggtitle("Figura 1 - Taxa de clickthroug x Data de ocorrência x Grupo") +
+    geom_bar(stat = "identity", fill = "white", color = "red") + 
+    geom_text(aes(label = paste(round(rate, digits = 2), "%")), angle = 45, position = position_stack(vjust = .7), size = 2.7) +
+    ylab("Taxa de clickthrough") + 
+    xlab("Data de ocorrência") +
+    theme(text = element_text(family = "Arial", size = 10), plot.title = element_text(size = 10), axis.title.x = element_text(size = 10), axis.title.y = element_text(size = 10)) +
+    facet_grid(.~group, labeller = as_labeller(group_names))
+
+##Calculando a estatística para os grupos
+mean_group_function <- function(data, g){  
+  group_g = filter(data, group == eval(parse(text = "g")))  ##funciona também com group == x
+  mean_rate_of_sessions_with = mean(group_g$rate)
+}
+
+print(mean_group_function(sessions_by_date_and_group, "a"))
+print(mean_group_function(sessions_by_date_and_group, "b"))
+
+```
+
+Em média, para o grupo A, em 35,25% das sessões diárias, os usuários clicam em algum resultado de busca e, para o grupo B, em 18,72%.
+
+
+##### **Calculando o p-valor**
+
+```{r message = FALSE, warning = FALSE}
+
+##sessions_by_date armazena as taxas diárias de *clickthough*
+rates_by_group = sessions_by_date_and_group %>%
+  select(group, rate) ##selecionando apenas estas variáveis para o cálculo do p-valor com permutação
+
+glimpse(rates_by_group) 
+
+##efetuando o cálculo do p-valor
+permutationTest2(rates_by_group, mean(rate), treatment = group)
+
+```
+
+O p-valor calculado é 0,0002.
+
+
+##### **Interpretando o resultado obtido**
+
+Dado que o p-valor calculado (0,0002) é menor que o nível de significância (&alpha; = 0,05), conclui-se que o resultado é estatisticamente significativo, pois o erro (0,02%) está dentro do limite fixado (p-valor < &alpha;). Portanto, a hipótese nula "A categoria do grupo (A ou B) não influencia a taxa diária de *clickthrough*" é rejeitada.
+
+
+#### **3.2 A taxa diária de zero resultados varia entre os grupos A e B? **
+
+
+##### **Estabelencendo as hipóteses nula e alternativa **
+
+* H<sub>0</sub>: A categoria do grupo (A ou B) não influencia a taxa diária de zero resultados
+* H<sub>1</sub>: A categoria do grupo influencia a taxa diária de zero resultados
+
+
+##### **Determinando o nível de significância do teste**
+Considera-se um nível de significância igual a 0,05 (&alpha; = 0,05), representando a probabilidade de 5% de rejeitar a hipótese nula quando esta for verdadeira.
+
+
+##### **Calculando a estatística de teste**
+
+A **média** das taxas diárias de zero resultados é a estatística considerada para fins de inferência estatística. A figura 2 exibe a distribuição de taxas por data de ocorrência e grupo. Em seguida, a média de taxas diárias de zero resultados por grupo é calculada.
+
+```{r message = FALSE, warning = FALSE}
+
+buscas2 = buscas_original %>%
+  filter(!is.na(results)) ##porque apenas resultados válidos (0 e diferente de 0) deve ser considerado
+
+glimpse(buscas2) ##visualizando as observações pós-filtragem
+
+sessions_by_date_and_group = buscas2 %>%
+  group_by(date = date(session_start_date), group) %>%       ##agrupando por data da ocorrência da sessão e por grupo
+  summarize(total_sessions_by_date = n(),       
+            total_sessions_with_zero_results_by_date = sum(results == 0), 
+            rate = (total_sessions_with_zero_results_by_date/total_sessions_by_date) * 100)   
+
+names(sessions_by_date_and_group)[1] <-"date" ##renomeando a primeira coluna
+
+glimpse(sessions_by_date_and_group) 
+
+group_names <- c('a' = "Grupo A", 'b' = "Grupo B")
+sessions_by_date_and_group %>% 
+    ggplot(aes(y = rate, x = date)) +
+    ggtitle("Figura 2 - Taxa de zero resultados x Data de ocorrência x Grupo") +
+    geom_bar(stat = "identity", fill = "white", color = "red") + 
+    geom_text(aes(label = paste(round(rate, digits = 2), "%")), angle = 45, position = position_stack(vjust = .7), size = 2.7) +
+    ylab("Taxa de zero resultados") + 
+    xlab("Data de ocorrência") +
+    theme(text = element_text(family = "Arial", size = 10), plot.title = element_text(size = 10), axis.title.x = element_text(size = 10), axis.title.y = element_text(size = 10)) +
+    facet_grid(.~group, labeller = as_labeller(group_names))
+
+print(mean_group_function(sessions_by_date_and_group, "a"))
+print(mean_group_function(sessions_by_date_and_group, "b"))
+
+```
+
+Em média, para o grupo A, em 18,31% das sessões diárias, há zero resultados de busca e, para o grupo B, em 18,65%.
+
+
+##### **Calculando o p-valor**
+
+```{r message = FALSE, warning = FALSE}
+
+##sessions_by_date armazena as taxas diárias de zero resultados
+rates_by_group = sessions_by_date_and_group %>%
+  select(group, rate) ##selecionando apenas estas variáveis para o cálculo do p-valor com permutação
+
+glimpse(rates_by_group) 
+
+##efetuando o cálculo do p-valor
+permutationTest2(rates_by_group, mean(rate), treatment = group)
+
+```
+
+O p-valor calculado é aproximadamente 0,2. 
+
+
+##### **Interpretando o resultado obtido**
+Dado que o p-valor calculado (0,2) é maior que o nível de significância (&alpha; = 0,05), conclui-se que o menor erro, que pode estar sendo cometido, ainda é maior que o erro máximo permitido (p-valor > &alpha;). Portanto, o resultado não é estatisticamente significativo, pois o risco de uma conclusão errada seria maior do que o quê se deseja assumir. A hipótese nula "A categoria do grupo (A ou B) não influencia a taxa diária de zero resultados" não é rejeitada.
+
+
+### **4. Conclusões**
+
+##### **Vantagens e desvantagens do p-valor x intervalos de Confiança**
+
+Neste relatório, o p-valor foi calculado a partir de reamostragens baseadas em permutação não-pareada com 9.999 repetições. O teste de significância é bi-caudal (*two-tailed* ou *two-sided*), pois se considera que a diferença do parâmetro estimado (média), entre os grupos A e B, se desvia em qualquer direção das regiões de rejeição (vide Figura 3). Para melhor compreensão, note que a região de aceitação compreende (1 - &alpha;) e cada região de rejeição &alpha;/2.
+
+![Figura 3 - Regiões de rejeição em teste bi-caudal - Fonte: https://stats.libretexts.org](../img/Figura.png)
+
+
+
+O p-valor é um nível descrito associado ao teste de hipóteses e, portanto, não fornece magnitude de diferenças. Todo teste de hipótese possui erros associados; neste relatório, considerou-se apenas o erro do tipo I (também conhecido como nível de significância, expresso por &alpha;) que corresponde à probabilidade de concluir uma associação que não existe. Nesse contexto, o p-valor é definido como o menor nível de significância que pode ser assumido para a rejeição da hipótese nula.
+
+Por outro lado, o intervalo de confiança representa a amplitude de valores que têm probabilidade (definida de acordo com o nível de confiança) de conter o verdadeiro valor da população. Sendo assim, de acordo com o nível de confiança é possível inferir conclusões a respeito da população.
+
+Com isso em mente, seguem conclusões específicas para as perguntas investigadas.
+
+
+#### **4.1 Conclusões baseadas em p-valor *vs* intervalo de confiança - A taxa diária de *clickthrough* varia entre os grupos A e B?**
+
+* p-valor calculado: 0,0002 (< 0,05), com 95% de confiança, infere-se que há diferenças entre as taxas diárias de clickthrough dos grupos A e B para a população, mas não se quantifica tal diferença;
+
+* intervalo de confiança: com 95% de confiança, afirma-se que o intervalo de confiança (14,05 a 24,61) contêm as verdadeiras diferenças entre os grupos (para a população). E, uma vez que este intervalo é positivo, conclui-se que há diferença estatisticamente significativa quanto às taxas diárias de *clickthrough* entre os grupos A e B. Infere-se, para a população, que as taxas do grupo A são maiores que as do grupo B. Seguem a distribuição amostral da diferença entre as médias das taxas diárias de *clickthrough* para os grupos A e B (Figura 4) e o intervalo de confiança calculado.
+
+```{r message = FALSE,warning = FALSE}
+
+set.seed(123)    ## semente 'aleatória' para a aleatoriedade de amostras
+
+experimento1 = sample_n(buscas1, 1000)   ## obtém amostra de tamanho 1000
+glimpse(experimento1)               
+
+bootstrap_group_function <- function(data, index){   
+  
+  mean_rate_of_sessions_with_clicks_by_group = data %>%
+      slice(index) %>%
+      group_by(group, date(session_start_date)) %>%
+      summarize(total_sessions_by_date = n(), 
+            total_sessions_with_clicks_by_date = sum(num_clicks > 0), 
+            rate = (total_sessions_with_clicks_by_date/total_sessions_by_date) * 100) %>%
+      summarize(mean_rate = mean(rate)) %>% 
+      pull(mean_rate)  
+      
+    return(mean_rate_of_sessions_with_clicks_by_group[1] - mean_rate_of_sessions_with_clicks_by_group[2])
+  
+}
+
+bootstraps <- boot(experimento1, bootstrap_group_function, R = 2000)
+glimpse(bootstraps$t)
+
+tibble(estatistica = as.double(bootstraps$t)) %>% 
+  ggplot(aes(x = estatistica)) + 
+  geom_histogram(fill = "white", color = "red") +
+  ggtitle("Figura 4 - Distribuição amostral da diferença entre as médias das taxas\ndiárias de clickthrough para os grupos A e B") +
+  ylab(" ") +
+  xlab("Média das taxas diárias de clickthrough") +
+  theme(text = element_text(family = "Arial", size = 10), plot.title = element_text(size = 10), axis.title.x = element_text(size = 10), axis.title.y = element_text(size = 10))
+
+boot.ci(bootstraps, conf = 0.95, type = "perc")   
+
+```
+
+
+#### **4.2 Conclusões baseadas em p-valor *vs* intervalo de confiança - A taxa diária de zero resultados varia entre os grupos A e B?**
+
+* p-valor calculado: 0,2 (> 0,05), com 95% de confiança, infere-se que não há evidência suficientemente forte para concluir que a hipótese nula é falsa; além disso, não se pode afirmar que as médias de taxas diárias de zero resultados sejam iguais. 
+
+* intervalo de confiança: Conclui-se que o intervalo de confiança (-5,59 a 5,15) contêm as verdadeiras diferenças entre os grupos (para a população), com 95% de confiança. Uma vez que este intervalo contém o valor zero, afirma-se que as diferenças entre os grupos A e B não são estatisticamente significativas. Para complementar esta conclusão, a Figura 5 exibe a distribuição amostral da diferença entre as médias das taxas diárias de zero resultados para os grupos A e B; seguida do cálculo do intervalo de confiança.
+
+```{r message = FALSE,warning = FALSE}
+
+experimento2 = sample_n(buscas2, 1000)   ## obtém amostra de tamanho 1000
+glimpse(experimento2)               
+
+bootstrap_group_function <- function(data, index){   ## computa a estatística de interesse e é um parâmetro para boot
+  
+  mean_rate_of_sessions_with_zero_results_by_group = data %>%
+      slice(index) %>%
+      group_by(group, date(session_start_date)) %>%
+      summarize(total_sessions_by_date = n(), 
+            total_sessions_with_zero_results_by_date = sum(results == 0), 
+            rate = (total_sessions_with_zero_results_by_date/total_sessions_by_date) * 100) %>%
+      summarize(mean_rate = mean(rate)) %>% ## média das taxas diárias de zero resultados
+      pull(mean_rate)  ##variável de interesse
+      
+    return(mean_rate_of_sessions_with_zero_results_by_group[1] - mean_rate_of_sessions_with_zero_results_by_group[2])
+  
+}
+
+bootstraps <- boot(experimento2, bootstrap_group_function, R = 2000)
+glimpse(bootstraps$t)
+
+tibble(estatistica = as.double(bootstraps$t)) %>% 
+  ggplot(aes(x = estatistica)) + 
+  geom_histogram(fill = "white", color = "red") +
+  ggtitle("Figura 5 - Distribuição amostral da diferença entre as médias das taxas\ndiárias de zeros resultados para os grupos A e B") +
+  ylab(" ") +
+  xlab("Média das taxas diárias de zero resultados") +
+  theme(text = element_text(family = "Arial", size = 10), plot.title = element_text(size = 10), axis.title.x = element_text(size = 10), axis.title.y = element_text(size = 10))
+
+boot.ci(bootstraps, conf = 0.95, type = "perc")   
+
+```
+
+
+**Observação importante!** Os resultados apresentados neste relatório diferem daqueles exibidos no Relatório do Lab 3 - *Checkpoint* 1, em relação à primeira pergunta, pois o tamanho da amostra considerado no processo de *bootstraping* foi diferente (40 observações x 1000 observações consideradas neste relatório). Observou-se que o tamanho da amostra influenciou no cálculo do intervalo de confiança para a diferença entre as médias de taxas diárias de *clickthrough* entre os grupos A e B, no Relatório anterior, de forma a influenciar diretamente as conclusões sobre o teste A/B. Assim, este erro foi corrigido neste relatório!
+
+
+
